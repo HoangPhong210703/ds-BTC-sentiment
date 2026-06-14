@@ -1,12 +1,14 @@
+import asyncio
 import logging
-from enum import Enum
+import os
+from functools import lru_cache
 from typing import Any
 
-import httpx
-import spacy
-
 logger = logging.getLogger(__name__)
-gliner_service_url = "https://dev.loomix.ai/v1/api/model"
+
+GLINER_MODEL_NAME = os.getenv("GLINER_MODEL_NAME", "urchade/gliner_small-v2.1")
+GLINER_THRESHOLD = float(os.getenv("GLINER_THRESHOLD", "0.5"))
+GLINER_USE_ONNX = os.getenv("GLINER_USE_ONNX", "false").lower() in ("1", "true", "yes")
 GLINER_SUPPORTED_LABELS: list[str] = [
     "Token Cryptocurrency",
     "Partially Algorithmic Stablecoin",
@@ -62,10 +64,6 @@ GLINER_SUPPORTED_LABELS: list[str] = [
 NER_THRESHOLD: float = 0.5
 
 
-class Endpoint(str, Enum):
-    NER = "/gliner"
-
-
 labels = [
     "Token Cryptocurrency",
     "Lending",
@@ -113,7 +111,11 @@ labels = [
 ]
 
 
-nlp = spacy.load("en_core_web_sm")
+@lru_cache(maxsize=1)
+def _get_nlp():
+    import spacy
+
+    return spacy.load("en_core_web_sm")
 
 
 def split_text_into_chunks(text, max_tokens=100):
@@ -129,6 +131,7 @@ def split_text_into_chunks(text, max_tokens=100):
         List[str]: Danh sách các chunk đã chia.
     """
 
+    nlp = _get_nlp()
     doc = nlp(text)
 
     # Tách câu giữ nguyên khoảng trắng cuối câu
@@ -178,79 +181,64 @@ def update_entity_positions(entities, chunk_offset):
     return updated_entities
 
 
+@lru_cache(maxsize=1)
+def _get_model():
+    from gliner import GLiNER
+
+    logger.info("Loading GLiNER model %s (onnx=%s)", GLINER_MODEL_NAME, GLINER_USE_ONNX)
+    if GLINER_USE_ONNX:
+        model = GLiNER.from_pretrained(
+            GLINER_MODEL_NAME, load_onnx_model=True, load_tokenizer=True
+        )
+    else:
+        model = GLiNER.from_pretrained(GLINER_MODEL_NAME)
+    logger.info("GLiNER model loaded.")
+    return model
+
+
 class GlinerModelService:
-    def __init__(self, url: str = gliner_service_url):
-        self.url: str = url
+    def __init__(self, url: str | None = None):
+        # `url` kept for backward compatibility; inference now runs locally.
+        self.model = _get_model()
 
-    async def post(
-        self, endpoint: str, payload: dict[str, Any]
-    ) -> list[dict[str, Any]]:
-        data: list[dict[str, Any]] = []
-        logger.info(f"POST request to {endpoint}")
-        # print(f"POST request to {endpoint} with payload: {payload}")
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    f"{self.url}/{endpoint.lstrip('/')}", json=payload
-                )
-                _ = response.raise_for_status()
-                data = response.json()
-        except httpx.RequestError as e:
-            logger.error(f"Request error at {endpoint}: {e}")
-            print(f"Request error at {endpoint}: {e}")
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP error at {endpoint}: {e}")
-            print(f"HTTP error at {endpoint}: {e}")
-        except ValueError as e:
-            logger.error(f"Failed to decode JSON from {endpoint}: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error at {endpoint}: {e}")
-            print(f"Unexpected error at {endpoint}: {e}")
-        return data
-
-    async def _ner(self, text: str) -> list[dict[str, Any]]:
-        """
-        Call the NER endpoint of the Gliner model service.
-        :param payload: The payload to send to the NER endpoint.
-        :return: The response from the NER endpoint.
-        """
-        payload = {
-            "text": text,
-            "labels": labels,
-            "threshold": 0.5,
-            "multi_label": False,
-        }
-        data = await self.post(Endpoint.NER, payload)
-        if not data:
-            return []
-        return data
-
-    async def predict_text(self, text):
+    async def predict_text(self, text: str) -> list[dict[str, Any]]:
         chunks = split_text_into_chunks(text)
-        chunked = ""
-        for c in chunks:
-            # print(f"chunk: {c}")
-            chunked += c[0]
+        if not chunks:
+            return []
 
-        sum_entity = []
-        for c in chunks:
-            text_t = c[0]
-            entities = await self._ner(text_t)
-            entities = update_entity_positions(entities, c[1])
-            sum_entity.extend(entities)
+        texts = [chunk for chunk, _offset in chunks]
+        offsets = [offset for _chunk, offset in chunks]
 
+        try:
+            batched = await asyncio.to_thread(
+                self.model.batch_predict_entities,
+                texts,
+                labels,
+                threshold=GLINER_THRESHOLD,
+            )
+        except Exception as e:  # inference must never crash the scrape
+            logger.error("GLiNER inference failed: %s", e, exc_info=True)
+            return []
+
+        if len(batched) != len(offsets):
+            logger.warning(
+                "GLiNER returned %d results for %d chunks; entities may be lost",
+                len(batched),
+                len(offsets),
+            )
+
+        sum_entity: list[dict[str, Any]] = []
+        for entities, offset in zip(batched, offsets):
+            sum_entity.extend(update_entity_positions(entities, offset))
         return sum_entity
 
 
 if __name__ == "__main__":
-    import asyncio
-
-    # Example usage
     gliner_service = GlinerModelService()
-    text = "Bitcoin is a cryptocurrency."
+    text = "Coinbase listed Solana after Ethereum's network upgrade."
 
     async def main():
-        ner_results = await gliner_service.ner(text)
+        ner_results = await gliner_service.predict_text(text)
         print(ner_results)
 
     asyncio.run(main())

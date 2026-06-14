@@ -28,3 +28,10 @@ apache-airflow==2.10.2
 # Utilities
 python-json-logger==2.0.7
 pydantic==2.10.6
+
+# Local NER (GLiNER). torch is installed CPU-only in the Dockerfiles.
+# Pin transformers<5 (5.x needs torch>=2.4) and huggingface_hub<1.0
+# (1.x changed from_pretrained, breaking gliner 0.2.13's _from_pretrained).
+gliner==0.2.13
+transformers>=4.38,<5
+huggingface_hub>=0.23,<1.0

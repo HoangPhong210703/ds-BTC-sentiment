@@ -1,0 +1,15 @@
+# Environment for the BTC price+news notebooks (use Python 3.11/3.12).
+pandas
+numpy
+pymongo
+ta
+scikit-learn
+xgboost
+matplotlib
+jupyter
+ipykernel
+# FinBERT headline sentiment (CPU is fine; first run is slow, results are cached).
+transformers
+torch
+# Needed only for the LSTM cell in 2_modeling.ipynb (heavy; CPU is fine).
+tensorflow

@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from typing import Any
 
 from bs4 import BeautifulSoup
@@ -168,51 +169,61 @@ async def urls_from_webpage() -> list[str]:
 
     existing_urls = await get_existing_urls()  # storing all existing urls into a list
     print(f"found {len(existing_urls)} existing urls in DB")
+    # Reduced to 5 reliable feeds for now to keep per-run load (and worker memory)
+    # low. The full 30-feed list is kept below, commented, for easy restore.
     feeds = [
         "https://cointelegraph.com/rss",
-        "https://99bitcoins.com/rss",
-        "https://feeds.bloomberg.com/crypto/news.rss",
-        "https://cryptodnes.bg/en/feed",
-        "https://ambcrypto.com/feed/",
-        "https://coingape.com/feed/",
-        "https://www.cryptotimes.io/feed/",
-        "https://blockworks.co/feed",
-        "https://cryptoslate.com/feed/",
         "https://decrypt.co/feed",
-        "https://zycrypto.com/feed/",
-        "https://dailyhodl.com/feed/",
-        "https://bitcoinist.com/feed/",
+        "https://cryptoslate.com/feed/",
         "https://crypto.news/feed/",
-        "https://finbold.com/feed/",
-        "https://u.today/rss",
-        "https://www.newsbtc.com/feed/",
-        "https://insidebitcoins.com/feed",
-        "https://cryptomufasa.com/feed/",
-        "https://cryptobriefing.com/feed/",
-        "https://www.thecoinrepublic.com/feed/",
-        "https://en.bitcoinsistemi.com/feed/",
-        "https://crypto-economy.com/feed/",
-        "https://www.cointribune.com/en/feed/",
-        "https://cryptonews.com/rss/",
-        "https://dailycoin.com/feed/",
-        "https://en.cryptonomist.ch/feed/",
-        "https://coinpaprika.com/news/feed/",
         "https://beincrypto.com/feed/",
-        "https://www.cryptopolitan.com/rss",
+        # --- full list (re-enable when memory/throughput allows) ---
+        # "https://99bitcoins.com/rss",
+        # "https://feeds.bloomberg.com/crypto/news.rss",
+        # "https://cryptodnes.bg/en/feed",
+        # "https://ambcrypto.com/feed/",
+        # "https://coingape.com/feed/",
+        # "https://www.cryptotimes.io/feed/",
+        # "https://blockworks.co/feed",
+        # "https://zycrypto.com/feed/",
+        # "https://dailyhodl.com/feed/",
+        # "https://bitcoinist.com/feed/",
+        # "https://finbold.com/feed/",
+        # "https://u.today/rss",
+        # "https://www.newsbtc.com/feed/",
+        # "https://insidebitcoins.com/feed",
+        # "https://cryptomufasa.com/feed/",
+        # "https://cryptobriefing.com/feed/",
+        # "https://www.thecoinrepublic.com/feed/",
+        # "https://en.bitcoinsistemi.com/feed/",
+        # "https://crypto-economy.com/feed/",
+        # "https://www.cointribune.com/en/feed/",
+        # "https://cryptonews.com/rss/",
+        # "https://dailycoin.com/feed/",
+        # "https://en.cryptonomist.ch/feed/",
+        # "https://coinpaprika.com/news/feed/",
+        # "https://www.cryptopolitan.com/rss",
     ]
+
+    # Cap new articles taken per feed per run (keeps memory/runtime bounded).
+    max_per_feed = int(os.getenv("MAX_ARTICLES_PER_FEED", "10"))
 
     for url in feeds:
         try:
             res = await scraper.fetch(url)
             logger.info(f"Fetched {url} with status code {scraper.status_code}")
             soup = BeautifulSoup(res, "xml")
+            taken = 0
             for item in soup.find_all("item"):
+                if taken >= max_per_feed:
+                    break
                 links = item.findAll("link")
                 for link in links:
                     if (
                         link.text not in existing_urls and "/videos/" not in link.text
                     ):  # Handling cases when it is a url to a video or a podcast for some websites
                         urls.append(link.text)
+                        taken += 1
         except RuntimeError:
             continue
     logger.info("Number of new urls in this session: " + str(len(urls)))
@@ -267,18 +278,16 @@ def extract_json_ld_data(soup: BeautifulSoup) -> list[dict[Any, Any] | None]:
         return []
 
 
-async def async_extract_data_from_url(url: str) -> dict[str, Any]:
+async def async_extract_data_from_url(url: str, run_ner: bool = True) -> dict[str, Any]:
     from datetime import datetime
     from urllib.parse import urlparse
 
     import trafilatura
     from bs4 import BeautifulSoup
 
-    from ner_model.gliner_model_service import GlinerModelService
     from scraper.scraper_service import AsyncWebScraper
 
     scraper = AsyncWebScraper()
-    gliner_client = GlinerModelService()
 
     doc = await scraper.fetch(url)
 
@@ -352,7 +361,10 @@ async def async_extract_data_from_url(url: str) -> dict[str, Any]:
 
     # tokens_mentioned = await async_gliner_extractor.retrieve_tokens_found(content)
     entities = []
-    if content and isinstance(content, str):
+    if run_ner and content and isinstance(content, str):
+        from ner_model.gliner_model_service import GlinerModelService
+
+        gliner_client = GlinerModelService()
         entities = await gliner_client.predict_text(content)
 
     if upload_date:
@@ -371,6 +383,6 @@ async def async_extract_data_from_url(url: str) -> dict[str, Any]:
         "author": author,
         "crawl_date": crawl_date,
         "image_url": image_url,
-        "ner": str(entities),
+        "ner": str(entities) if run_ner else "",
         "ner_counted": False,
     }

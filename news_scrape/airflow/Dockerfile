@@ -14,8 +14,10 @@ WORKDIR /opt/airflow
 
 # Copy requirements và cài bằng airflow user
 COPY requirements.txt .
+RUN pip install --no-cache-dir torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 RUN python -m spacy download en_core_web_sm
+RUN mkdir -p /opt/airflow/hf_cache
 
 # Set PYTHONPATH
 ENV PYTHONPATH="/opt/airflow:${PYTHONPATH}"

@@ -32,6 +32,7 @@ RUN adduser \
 
 # Install dependencies first (for better caching)
 COPY requirements.txt /app/
+RUN pip install --no-cache-dir torch==2.2.2 --index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Switch to the non-privileged user to run the application.

@@ -9,6 +9,11 @@ from mongo.mongo_client import MongoService
 
 logger = logging.getLogger(__name__)
 
+# Max articles processed through GLiNER concurrently. Each concurrent slot holds
+# a model forward pass in memory, so this is the main lever against OOM. Keep low
+# on memory-constrained hosts; raise for speed when RAM allows.
+SCRAPE_CONCURRENCY = int(os.getenv("NER_SCRAPE_CONCURRENCY", "2"))
+
 # Hàm xử lý một URL
 
 
@@ -37,7 +42,7 @@ async def stream_data():
         urls = await urls_from_webpage()
         print(f"Found {len(urls)} URLs to process.")
         # _ = await mongo_client.insert_news_url(urls)
-        semaphore = asyncio.Semaphore(5)
+        semaphore = asyncio.Semaphore(SCRAPE_CONCURRENCY)
 
         async def limited_process_url(url):
             async with semaphore:

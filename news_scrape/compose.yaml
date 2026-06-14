@@ -19,9 +19,16 @@ x-airflow-common: &airflow-common
     # If you want to use it, outcomment it and replace airflow.cfg with the name of your config file
     AIRFLOW_CONFIG: "/opt/airflow/config/airflow.cfg"
     MONGO_HOST: news-mongo
+    HF_HOME: /opt/airflow/hf_cache
+    GLINER_MODEL_NAME: ${GLINER_MODEL_NAME:-urchade/gliner_small-v2.1}
+    GLINER_THRESHOLD: ${GLINER_THRESHOLD:-0.5}
+    GLINER_USE_ONNX: ${GLINER_USE_ONNX:-false}
+    NER_SCRAPE_CONCURRENCY: ${NER_SCRAPE_CONCURRENCY:-2}
+    MAX_ARTICLES_PER_FEED: ${MAX_ARTICLES_PER_FEED:-10}
   volumes:
     - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
     - ${AIRFLOW_PROJ_DIR:-.}/config:/opt/airflow/config
+    - hf-cache:/opt/airflow/hf_cache
   user: "${AIRFLOW_UID:-50000}:0"
   networks:
     - news-app
@@ -222,3 +229,6 @@ volumes:
     name: news-mongo
     driver: local
   postgres-db-volume:
+  hf-cache:
+    name: news-hf-cache
+    driver: local

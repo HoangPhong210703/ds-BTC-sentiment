@@ -29,9 +29,9 @@ default_args = {
 }
 
 with DAG(
-    dag_id="news_pipeline_dag",
+    dag_id="scrape_and_process_dag",
     default_args=default_args,
-    schedule_interval="0 */3 * * *",  # every 3 hours
+    schedule_interval="0 */1 * * *",  # every 1 hour
     catchup=False,
     tags=["news", "ner"],
 ) as dag:
